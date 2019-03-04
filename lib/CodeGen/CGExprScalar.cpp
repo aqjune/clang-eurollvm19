@@ -35,6 +35,7 @@
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PatternMatch.h"
 #include <cstdarg>
 
 using namespace clang;
@@ -3383,8 +3384,19 @@ Value *ScalarExprEmitter::EmitSub(const BinOpInfo &op) {
   // Otherwise, this is a pointer subtraction.
 
   // Do the raw subtraction part.
-  llvm::Type *psubTys[] = { CGF.PtrDiffTy, op.LHS->getType(), op.RHS->getType() };
-  Value *psubArgs[] = { op.LHS, op.RHS };
+  llvm::Type *I1Ty = llvm::Type::getInt1Ty(VMContext);
+  auto isFromInt = [](const Value *V) {
+    Value *TmpVal;
+    return match(V, llvm::PatternMatch::m_IntToPtr(
+                 llvm::PatternMatch::m_Value(TmpVal))) ||
+           isa<llvm::ConstantPointerNull>(V);
+  };
+  // If neither of the operands is inttoptr cast, use psub inbounds.
+  bool isInbounds = !isFromInt(op.LHS) && !isFromInt(op.RHS);
+  llvm::Constant *Inbounds = llvm::ConstantInt::get(I1Ty, (uint64_t)isInbounds);
+  llvm::Type *psubTys[] = { CGF.PtrDiffTy, op.LHS->getType(),
+                            op.RHS->getType() };
+  Value *psubArgs[] = { op.LHS, op.RHS, Inbounds };
   Value *diffInChars = Builder.CreateCall(
              CGF.CGM.getIntrinsic(llvm::Intrinsic::psub, ArrayRef<llvm::Type *>(psubTys, 3)),
              psubArgs, "sub.ptr.sub");
